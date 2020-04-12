@@ -8,6 +8,7 @@ import tempfile
 import shutil
 import ctypes
 from datetime import datetime, time, date
+from functools import partial
 import six
 
 from zope.interface import implementer
@@ -366,6 +367,37 @@ class TableInfo(object):
             DBSession.add(obj)
 
 
+class TableInfoVersioned(TableInfo):
+    def setup_metadata(self, tablename):
+        metadata = db.MetaData(schema='vector_layer')
+        geom_fldtype = _GEOM_TYPE_2_DB[self.geometry_type]
+
+        class model(object):
+            def __init__(self, **kwargs):
+                for k, v in six.iteritems(kwargs):
+                    setattr(self, k, v)
+
+        table = db.Table(
+            tablename,
+            metadata,
+            db.Column('id', db.Integer, primary_key=True),
+            db.Column('fid', db.Integer, nullable=False),
+            db.Column('changed', db.DateTime, default=datetime.utcnow),
+            db.Column('deleted', db.Boolean, default=False),
+            db.Column('geom', ga.Geometry(
+                dimension=2, srid=self.srs_id,
+                geometry_type=geom_fldtype)),
+            *map(lambda fld: db.Column(fld.key, _FIELD_TYPE_2_DB[
+                fld.datatype]), self.fields)
+        )
+
+        db.mapper(model, table)
+
+        self.table = table
+        self.model = model
+        self.metadata = metadata
+
+
 class VectorLayerField(Base, LayerField):
     identity = 'vector_layer'
 
@@ -385,6 +417,7 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
 
     tbl_uuid = db.Column(db.Unicode(32), nullable=False)
     geometry_type = db.Column(db.Enum(*GEOM_TYPE.enum), nullable=False)
+    versioned = db.Column(db.Boolean, default=False)
 
     __field_class__ = VectorLayerField
 
@@ -408,6 +441,10 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
     @property
     def _tablename(self):
         return 'layer_%s' % self.tbl_uuid
+
+    @property
+    def _tablename_versioned(self):
+        return '%s_history' % self._tablename
 
     def setup_from_ogr(self, ogrlayer, strdecode):
         tableinfo = TableInfo.from_ogrlayer(ogrlayer, self.srs.id, strdecode)
@@ -477,7 +514,7 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
 
         DBSession.merge(obj)
 
-        self.after_feature_update.fire(resource=self, feature=feature)
+        self.after_feature_update.fire(resource=self, feature=feature, obj=obj)
 
         on_data_change.fire(self, feature.geom)
         # TODO: Old geom version
@@ -507,7 +544,7 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
         DBSession.flush()
         DBSession.refresh(obj)
 
-        self.after_feature_create.fire(resource=self, feature_id=obj.id)
+        self.after_feature_create.fire(resource=self, feature_id=obj.id, obj=obj)
 
         on_data_change.fire(self, feature.geom)
 
@@ -530,7 +567,7 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
         obj = DBSession.query(tableinfo.model).filter_by(id=feature.id).one()
         DBSession.delete(obj)
 
-        self.after_feature_delete.fire(resource=self, feature_id=feature_id)
+        self.after_feature_delete.fire(resource=self, feature_id=feature_id, obj=obj)
 
         on_data_change.fire(self, feature.geom)
 
@@ -541,7 +578,9 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
         tableinfo = TableInfo.from_layer(self)
         tableinfo.setup_metadata(tablename=self._tablename)
 
-        DBSession.query(tableinfo.model).delete()
+        query = self.feature_query()
+        for feature in query():
+            self.feature_delete(feature.id)
 
         self.after_all_feature_delete.fire(resource=self)
 
@@ -791,6 +830,16 @@ class _geometry_type_attr(SP):
             raise ResourceError(_("Geometry type for existing resource can't be changed."))
 
 
+class _versioned_attr(SP):
+
+    def setter(self, srlzr, value):
+        srlzr.obj.versioned = value
+        if value:
+            tableinfo = TableInfoVersioned.from_layer(srlzr.obj)
+            tableinfo.setup_metadata(tablename=srlzr.obj._tablename_versioned)
+            tableinfo.metadata.create_all(bind=DBSession.connection())
+
+
 P_DSS_READ = DataStructureScope.read
 P_DSS_WRITE = DataStructureScope.write
 P_DS_READ = DataScope.read
@@ -803,6 +852,7 @@ class VectorLayerSerializer(Serializer):
 
     srs = SR(read=P_DSS_READ, write=P_DSS_WRITE)
     geometry_type = _geometry_type_attr(read=P_DSS_READ, write=P_DSS_WRITE)
+    versioned = _versioned_attr(read=P_DSS_READ, write=P_DSS_WRITE)
 
     source = _source_attr(read=None, write=P_DS_WRITE)
     fields = _fields_attr(read=None, write=P_DS_WRITE)
@@ -1104,3 +1154,23 @@ class FeatureQueryBase(object):
                     return row[0]
 
         return QueryFeatureSet()
+
+
+def create_version(resource, **kwargs):
+    obj = kwargs["obj"]
+    deleted = kwargs.get("deleted", False)
+
+    if resource.versioned:
+        tableinfo = TableInfoVersioned.from_layer(resource)
+        tableinfo.setup_metadata(tablename=resource._tablename_versioned)
+
+        hist = tableinfo.model(fid=obj.id, geom=obj.geom, deleted=deleted)
+        for f in tableinfo.fields:
+            setattr(hist, f.key, getattr(obj, f.key))
+
+        DBSession.add(hist)
+
+
+VectorLayer.after_feature_create += create_version
+VectorLayer.after_feature_update += create_version
+VectorLayer.after_feature_delete += partial(create_version, deleted=True)
