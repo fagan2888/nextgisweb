@@ -303,7 +303,7 @@ def deserialize(feat, data):
                 ext.deserialize(feat, data['extensions'][cls.identity])
 
 
-def serialize(feat, keys=None, geom_format=None):
+def serialize(feat, keys=None, geom_format=None, extensions=True):
     result = OrderedDict(id=feat.id)
 
     if geom_format is not None and geom_format.lower() == "geojson":
@@ -349,10 +349,11 @@ def serialize(feat, keys=None, geom_format=None):
 
         result['fields'][fld.keyname] = fval
 
-    result['extensions'] = OrderedDict()
-    for cls in FeatureExtension.registry:
-        ext = cls(feat.layer)
-        result['extensions'][cls.identity] = ext.serialize(feat)
+    if extensions:
+        result['extensions'] = OrderedDict()
+        for cls in FeatureExtension.registry:
+            ext = cls(feat.layer)
+            result['extensions'][cls.identity] = ext.serialize(feat)
 
     return result
 
@@ -634,7 +635,42 @@ def store_collection(layer, request):
     return Response(json.dumps(result, cls=geojson.Encoder), headers=headers)
 
 
+def versions(resource, request):
+    request.resource_permission(PERM_READ)
+
+    date_from = request.params.get("date_from")
+    date_to = request.params.get("date_to")
+    limit = request.GET.get("limit")
+    offset = request.GET.get("offset")
+    latest = request.params.get("latest", "false")
+    latest = latest.lower() == "true"
+
+    query = resource.version_query()
+    query.limit(limit, offset)
+    query.date_range(date_from, date_to)
+    query.geom()
+
+    if latest:
+        query.latest()
+
+    result = [
+        dict(
+            feature=serialize(feature, extensions=False, geom_format="geojson"),
+            version=version,
+        )
+        for feature, version in query()
+    ]
+
+    return Response(
+        json.dumps(result, cls=geojson.Encoder),
+        content_type="application/json",
+        charset="utf-8",
+    )
+
+
 def setup_pyramid(comp, config):
+    from ..vector_layer import VectorLayer
+
     config.add_route(
         'feature_layer.geojson', '/api/resource/{id}/geojson',
         factory=resource_factory) \
@@ -679,6 +715,11 @@ def setup_pyramid(comp, config):
         'feature_layer.store', r'/api/resource/{id:\d+}/store/',
         factory=resource_factory) \
         .add_view(store_collection, context=IFeatureLayer, request_method='GET')
+
+    config.add_route(
+        'feature_layer.versions', '/api/resource/{id}/versions/',
+        factory=resource_factory) \
+        .add_view(versions, context=VectorLayer, request_method='GET')
 
     from .identify import identify
     config.add_route(

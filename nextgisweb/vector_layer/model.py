@@ -485,6 +485,14 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
 
         return BoundFeatureQuery
 
+    @property
+    def version_query(self):
+
+        class BoundVersionQuery(VersionQueryBase):
+            layer = self
+
+        return BoundVersionQuery
+
     def field_by_keyname(self, keyname):
         for f in self.fields:
             if f.keyname == keyname:
@@ -1154,6 +1162,126 @@ class FeatureQueryBase(object):
                     return row[0]
 
         return QueryFeatureSet()
+
+
+class VersionQueryBase(object):
+    def __init__(self):
+        self._srs = None
+        self._geom = None
+        self._limit = None
+        self._offset = None
+        self._latest = None
+        self._date_from = None
+        self._date_to = None
+
+    def srs(self, srs):
+        self._srs = srs
+
+    def geom(self):
+        self._geom = True
+
+    def limit(self, limit, offset=0):
+        self._limit = limit
+        self._offset = offset
+
+    def latest(self):
+        self._latest = True
+
+    def date_range(self, date_from=None, date_to=None):
+        self._date_from = date_from
+        self._date_to = date_to
+
+    def __call__(self):
+        tableinfo = TableInfoVersioned.from_layer(self.layer)
+        tableinfo.setup_metadata(tablename=self.layer._tablename_versioned)
+        table = tableinfo.table
+
+        where = []
+        order_criterion = []
+
+        columns = [
+            table.columns.id,
+            table.columns.fid,
+            table.columns.deleted,
+            table.columns.changed
+        ]
+
+        srsid = self.layer.srs_id if self._srs is None else self._srs.id
+
+        geomcol = table.columns.geom
+        geomexpr = db.func.st_transform(geomcol, srsid)
+
+        if self._geom:
+            columns.append(db.func.st_asewkb(geomexpr).label('geom'))
+
+        if self._date_from:
+            where.append(table.columns.changed >= self._date_from)
+
+        if self._date_to:
+            where.append(table.columns.changed <= self._date_to)
+
+        selected_fields = []
+        for f in tableinfo.fields:
+            columns.append(table.columns[f.key].label(f.keyname))
+            selected_fields.append(f)
+
+        order_criterion.append(table.columns.id)
+
+        class VersionQuery(object):
+            layer = self.layer
+
+            _geom = self._geom
+            _limit = self._limit
+            _offset = self._offset
+            _latest = self._latest
+
+            def __iter__(self):
+                query = sql.select(columns)
+
+                if self._latest:
+                    sub_query = sql.select(
+                        [table.columns.fid, db.func.max(table.columns.changed).label("maxdate")]
+                    ).group_by(table.columns.fid).alias("grouped")
+
+                    join = sql.join(
+                        table,
+                        sub_query,
+                        db.and_(
+                            table.columns.fid == sub_query.c.fid,
+                            table.columns.changed == sub_query.c.maxdate,
+                        ),
+                    )
+
+                    query = query.select_from(join)
+
+                query = (
+                    query.limit(self._limit)
+                    .offset(self._offset)
+                    .order_by(*order_criterion)
+                    .where(db.and_(*where))
+                )
+
+                rows = DBSession.connection().execute(query)
+                for row in rows:
+                    fdict = dict((f.keyname, row[f.keyname])
+                                 for f in selected_fields)
+                    if self._geom:
+                        geom = geom_from_wkb(
+                            row['geom'].tobytes() if six.PY3
+                            else six.binary_type(row['geom']))
+                    else:
+                        geom = None
+
+                    feature = Feature(
+                        layer=self.layer, id=row.fid, fields=fdict, geom=geom,
+                    )
+
+                    yield (
+                        feature,
+                        dict(id=row.id, changed=row.changed, deleted=row.deleted)
+                    )
+
+        return VersionQuery()
 
 
 def create_version(resource, **kwargs):
