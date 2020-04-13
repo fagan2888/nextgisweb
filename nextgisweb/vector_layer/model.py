@@ -875,6 +875,51 @@ def _clipbybox2d_exists():
     )
 
 
+def _tokenize_filter(filters, tableinfo):
+    table = tableinfo.table
+
+    token = []
+    for k, o, v in filters:
+        supported_operators = (
+            "eq",
+            "ge",
+            "gt",
+            "ilike",
+            "in",
+            "le",
+            "like",
+            "lt",
+            "ne",
+            "notin",
+            "startswith",
+        )
+        if o not in supported_operators:
+            raise ValueError(
+                "Invalid operator '%s'. Only %r are supported."
+                % (o, supported_operators)
+            )
+
+        if v and o in ['in', 'notin']:
+            v = v.split(',')
+
+        if o in [
+            "ilike",
+            "in",
+            "like",
+            "notin",
+            "startswith",
+        ]:
+            o += "_op"
+
+        op = getattr(db.sql.operators, o)
+        if k == "id":
+            token.append(op(table.columns.id, v))
+        else:
+            token.append(op(table.columns[tableinfo[k].key], v))
+
+        return token
+
+
 @implementer(
     IFeatureQuery,
     IFeatureQueryFilter,
@@ -1027,45 +1072,7 @@ class FeatureQueryBase(object):
                     where.append(table.columns[tableinfo[k].key] == v)
 
         if self._filter:
-            token = []
-            for k, o, v in self._filter:
-                supported_operators = (
-                    "eq",
-                    "ge",
-                    "gt",
-                    "ilike",
-                    "in",
-                    "le",
-                    "like",
-                    "lt",
-                    "ne",
-                    "notin",
-                    "startswith",
-                )
-                if o not in supported_operators:
-                    raise ValueError(
-                        "Invalid operator '%s'. Only %r are supported."
-                        % (o, supported_operators)
-                    )
-
-                if v and o in ['in', 'notin']:
-                    v = v.split(',')
-
-                if o in [
-                    "ilike",
-                    "in",
-                    "like",
-                    "notin",
-                    "startswith",
-                ]:
-                    o += "_op"
-
-                op = getattr(db.sql.operators, o)
-                if k == "id":
-                    token.append(op(table.columns.id, v))
-                else:
-                    token.append(op(table.columns[tableinfo[k].key], v))
-
+            token = _tokenize_filter(self._filter, tableinfo)
             where.append(db.and_(*token))
 
         if self._filter_sql:
@@ -1186,6 +1193,9 @@ class VersionQueryBase(object):
         self._limit = limit
         self._offset = offset
 
+    def filter(self, *args):
+        self._filter = args
+
     def latest(self):
         self._latest = True
 
@@ -1238,9 +1248,9 @@ class VersionQueryBase(object):
                 geomcol, db.func.st_transform(
                     intgeom, self.layer.srs_id)))
 
-        # TODO: add filter by attribute
         if self._filter:
-            pass
+            token = _tokenize_filter(self._filter, tableinfo)
+            where.append(db.and_(*token))
 
         order_criterion.append(table.columns.id)
 

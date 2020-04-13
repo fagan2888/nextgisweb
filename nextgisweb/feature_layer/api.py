@@ -63,6 +63,20 @@ def _ogr_layer_from_features(layer, features, name=b'', ds=None, fid=None):
     return ogr_layer
 
 
+def _build_filter(resource, request):
+    filter_ = []
+    keys = [fld.keyname for fld in resource.fields]
+    for key in filter(lambda k: k.startswith('fld_'), request.GET.keys()):
+        try:
+            fld_key, operator = key.rsplit('__', 1)
+        except ValueError:
+            fld_key, operator = (key, 'eq')
+
+        if fld_key in ['fld_%s' % k for k in keys]:
+            filter_.append((re.sub('^fld_', '', fld_key), operator, request.GET[key]))
+    return filter_
+
+
 def view_geojson(request):
     request.GET["format"] = EXPORT_FORMAT_OGR["GEOJSON"].extension
     request.GET["zipped"] = "false"
@@ -454,17 +468,7 @@ def cget(resource, request):
         query.limit(int(limit), int(offset))
 
     # Filtering by attributes
-    filter_ = []
-    keys = [fld.keyname for fld in resource.fields]
-    for key in filter(lambda k: k.startswith('fld_'), request.GET.keys()):
-        try:
-            fld_key, operator = key.rsplit('__', 1)
-        except ValueError:
-            fld_key, operator = (key, 'eq')
-
-        if fld_key in ['fld_%s' % k for k in keys]:
-            filter_.append((re.sub('^fld_', '', fld_key), operator, request.GET[key]))
-
+    filter_ = _build_filter(resource, request)
     if filter_:
         query.filter(*filter_)
 
@@ -660,6 +664,10 @@ def versions(resource, request):
     if wkt is not None:
         geom = geom_from_wkt(wkt, srid=resource.srs.id)
         query.intersects(geom)
+
+    filter_ = _build_filter(resource, request)
+    if filter_:
+        query.filter(*filter_)
 
     result = [
         dict(
