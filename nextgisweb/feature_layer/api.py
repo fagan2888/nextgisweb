@@ -638,6 +638,9 @@ def store_collection(layer, request):
 def versions(resource, request):
     request.resource_permission(PERM_READ)
 
+    if not resource.versioned:
+        raise ValidationError(_("Changes tracking is not enabled on this layer."))
+
     date_from = request.params.get("date_from")
     date_to = request.params.get("date_to")
     limit = request.GET.get("limit")
