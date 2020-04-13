@@ -645,6 +645,7 @@ def versions(resource, request):
     date_to = request.params.get("date_to")
     limit = request.GET.get("limit")
     offset = request.GET.get("offset")
+    wkt = request.GET.get('intersects')
     latest = request.params.get("latest", "false")
     latest = latest.lower() == "true"
 
@@ -655,6 +656,10 @@ def versions(resource, request):
 
     if latest:
         query.latest()
+
+    if wkt is not None:
+        geom = geom_from_wkt(wkt, srid=resource.srs.id)
+        query.intersects(geom)
 
     result = [
         dict(

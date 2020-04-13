@@ -1173,6 +1173,8 @@ class VersionQueryBase(object):
         self._latest = None
         self._date_from = None
         self._date_to = None
+        self._intersects = None
+        self._filter = None
 
     def srs(self, srs):
         self._srs = srs
@@ -1190,6 +1192,9 @@ class VersionQueryBase(object):
     def date_range(self, date_from=None, date_to=None):
         self._date_from = date_from
         self._date_to = date_to
+
+    def intersects(self, geom):
+        self._intersects = geom
 
     def __call__(self):
         tableinfo = TableInfoVersioned.from_layer(self.layer)
@@ -1224,6 +1229,18 @@ class VersionQueryBase(object):
         for f in tableinfo.fields:
             columns.append(table.columns[f.key].label(f.keyname))
             selected_fields.append(f)
+
+        # TODO: move to separate function
+        if self._intersects:
+            intgeom = db.func.st_setsrid(db.func.st_geomfromtext(
+                self._intersects.wkt), self._intersects.srid)
+            where.append(db.func.st_intersects(
+                geomcol, db.func.st_transform(
+                    intgeom, self.layer.srs_id)))
+
+        # TODO: add filter by attribute
+        if self._filter:
+            pass
 
         order_criterion.append(table.columns.id)
 
