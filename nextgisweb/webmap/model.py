@@ -7,6 +7,7 @@ from sqlalchemy.types import TypeDecorator
 import geoalchemy2 as ga
 
 from .. import db
+from ..map import MapMixin
 from ..models import declarative_base
 from ..resource import (
     Resource,
@@ -32,7 +33,7 @@ class WebMapScope(Scope):
     annotation_write = Permission(_("Edit annotations"))
 
 
-class WebMap(Base, Resource):
+class WebMap(Base, Resource, MapMixin):
     identity = 'webmap'
     cls_display_name = _("Web map")
 
@@ -42,11 +43,6 @@ class WebMap(Base, Resource):
     bookmark_resource_id = db.Column(db.ForeignKey(Resource.id), nullable=True)
     draw_order_enabled = db.Column(db.Boolean, nullable=True)
     editable = db.Column(db.Boolean, nullable=False, default=False)
-
-    extent_left = db.Column(db.Float, default=-180)
-    extent_right = db.Column(db.Float, default=+180)
-    extent_bottom = db.Column(db.Float, default=-90)
-    extent_top = db.Column(db.Float, default=+90)
 
     annotation_enabled = db.Column(db.Boolean, nullable=False, default=False)
     annotation_default = db.Column(db.Boolean, nullable=False, default=False)
@@ -62,6 +58,10 @@ class WebMap(Base, Resource):
     @classmethod
     def check_parent(cls, parent):
         return isinstance(parent, ResourceGroup)
+
+    @classmethod
+    def display_path(cls):
+        return 'webmap.display'
 
     def to_dict(self):
         return dict(

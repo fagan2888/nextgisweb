@@ -1,4 +1,5 @@
 <%!
+from nextgisweb.map import MapMixin
 from nextgisweb.resource.util import _
 from nextgisweb.resource.scope import ResourceScope, DataScope
 from nextgisweb.webmap.model import WebMapScope
@@ -39,11 +40,8 @@ from nextgisweb.webmap.model import WebMapScope
                 <td>${tr(item.cls_display_name)}</td>
                 <td>${item.owner_user}</td>
                 <td class="children-table__action">
-                    %if item.cls == "webmap" and WebMapScope.display in permissions:
-                        <a class="material-icons icon-viewMap" href="${request.route_url('webmap.display', id=item.id)}" target="_blank" title="${tr(_('Display map'))}"></a>
-                    %endif
-                    %if item.cls == "scene_3d":
-                        <a class="material-icons icon-viewMap" href="${request.route_url('scene_3d.display', id=item.id)}" target="_blank" title="${tr(_('Display scene'))}"></a>
+                    %if isinstance(item, MapMixin) and WebMapScope.display in permissions:
+                        <a class="material-icons icon-viewMap" href="${request.route_url(item.display_path(), id=item.id)}" target="_blank" title="${tr(_('Display map'))}"></a>
                     %endif
                     %if (item.cls == "vector_layer" or item.cls == "postgis_layer") and DataScope.read in permissions:
                         <a class="material-icons icon-table" href="${request.route_url('feature_layer.feature.browse', id=item.id)}" title="${tr(_('Feature table'))}"></a>

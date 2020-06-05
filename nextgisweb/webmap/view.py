@@ -30,6 +30,10 @@ class SettingsWidget(Widget):
 
 
 def setup_pyramid(comp, config):
+    path_display = WebMap.display_path()
+    path_tiny = path_display + '.tiny'
+    path_shared_map_test = path_display + '.shared.test'
+
     def display(obj, request):
         request.resource_permission(WebMap.scope.webmap.display)
 
@@ -121,8 +125,8 @@ def setup_pyramid(comp, config):
             ),
             webmapPlugin=plugin,
             bookmarkLayerId=obj.bookmark_resource_id,
-            tinyDisplayUrl=request.route_url('webmap.display.tiny', id=obj.id),
-            testEmbeddedMapUrl=request.route_url('webmap.display.shared.test', id=obj.id),
+            tinyDisplayUrl=request.route_url(path_tiny, id=obj.id),
+            testEmbeddedMapUrl=request.route_url(path_shared_map_test, id=obj.id),
             webmapId=obj.id,
             webmapDescription=obj.description,
             webmapTitle=obj.display_name,
@@ -147,12 +151,12 @@ def setup_pyramid(comp, config):
         )
 
     config.add_route(
-        'webmap.display', r'/resource/{id:\d+}/display',
+        path_display, r'/resource/{id:\d+}/display',
         factory=resource_factory, client=('id',)
     ).add_view(display, context=WebMap, renderer='nextgisweb:webmap/template/display.mako')
 
     config.add_route(
-        'webmap.display.tiny', r'/resource/{id:\d+}/display/tiny',
+        path_tiny, r'/resource/{id:\d+}/display/tiny',
         factory=resource_factory, client=('id',)
     ).add_view(display, context=WebMap, renderer='nextgisweb:webmap/template/tinyDisplay.mako')
 
@@ -164,7 +168,7 @@ def setup_pyramid(comp, config):
         )
 
     config.add_route(
-        'webmap.display.shared.test', '/embedded/test.html'
+        path_shared_map_test, '/embedded/test.html'
     ).add_view(shared_map_test, renderer='nextgisweb:webmap/template/embeddedMapTest.mako')
 
     class DisplayMenu(DynItem):
@@ -181,6 +185,6 @@ def setup_pyramid(comp, config):
 
         def _url(self):
             return lambda args: args.request.route_url(
-                'webmap.display', id=args.obj.id)
+                path_display, id=args.obj.id)
 
     WebMap.__dynmenu__.add(DisplayMenu())
